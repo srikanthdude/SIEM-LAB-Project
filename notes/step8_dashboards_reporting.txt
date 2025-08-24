@@ -1,0 +1,142 @@
+---
+**Dashboards, Visualizations, and Reporting in Wazuh**
+
+Goal: make detection data usable for analysts by building saved searches, visualizations, and reports inside the Wazuh Dashboard (OpenSearch Dashboards).
+
+---
+
+## 0) Prerequisites
+
+* Wazuh Manager, Indexer, Dashboard are running.
+* Agents (Windows, Suricata, etc.) are sending logs (validated in Step 7).
+* You can log into the Dashboard in your browser (`https://192.168.100.10:5601` by default).
+
+---
+
+## 1) Verify data streams
+
+Inside Dashboard:
+
+1. **Navigate**: Menu → *Discover*.
+2. Select the index pattern: `wazuh-alerts-*`.
+   (If not created yet, go to *Stack Management → Index Patterns* and add `wazuh-alerts-*`).
+3. Run a quick search:
+
+   ```
+   agent.name: "windows"
+   ```
+
+   → You should see Windows events.
+4. Try:
+
+   ```
+   rule.id: 100130 OR rule.id:100140
+   ```
+
+   → Suricata high severity + hosts file FIM events.
+
+---
+
+## 2) Build Saved Searches
+
+Saved searches = reusable queries.
+
+Examples:
+
+* **Windows Failed Logons**
+
+  ```
+  rule.id: 100100
+  ```
+* **Brute Force Suspected**
+
+  ```
+  rule.id: 100300
+  ```
+* **Suricata High Severity Alerts**
+
+  ```
+  rule.id: 100130
+  ```
+
+Click **Save Search** for each and give it a clear name.
+
+---
+
+## 3) Visualizations
+
+Use *Visualize Library → Create Visualization*.
+
+Suggested charts:
+
+1. **Failed Logons Over Time (Line Chart)**
+
+   * Data: `wazuh-alerts-*`
+   * Y-axis: Count
+   * X-axis: @timestamp (date histogram)
+   * Filter: `rule.id:100100`
+
+2. **Top Source IPs (Bar Chart)**
+
+   * Y-axis: Count
+   * Buckets: Terms → `srcip`
+   * Filter: `rule.id:100300 OR rule.id:100130`
+
+3. **Event Distribution by Rule ID (Pie Chart)**
+
+   * Buckets: Terms → `rule.id`
+   * Filter: `agent.name: "windows"`
+
+4. **FIM Alerts by File Path (Bar Chart)**
+
+   * Terms on `syscheck.path`
+   * Filter: `rule.id:100140`
+
+---
+
+## 4) Build Dashboards
+
+1. Go to *Dashboard → Create new*.
+
+2. Add your saved visualizations + saved searches.
+
+3. Suggested layout:
+
+   **Title: Wazuh Lab Detection Dashboard**
+
+   * Top left: Line chart (failed logons)
+   * Top right: Top source IPs
+   * Middle: Suricata High Severity table
+   * Bottom left: Pie chart (distribution by rule ID)
+   * Bottom right: FIM alerts
+
+4. Save dashboard as: **“Lab SOC View”**.
+
+---
+
+## 5) PDF Reports
+
+1. Open your saved dashboard (*Lab SOC View*).
+2. Click on *Share → Generate PDF*.
+3. Export manually first to confirm.
+4. You can save/export PDFs for reporting, but no automation was set up in this project.
+
+---
+
+## 6) Validate
+
+* Trigger failed logons → see them in Discover + dashboard line chart.
+* Run nmap → Suricata + firewall alerts → appear in “Top source IPs” chart.
+* Modify hosts file → FIM alert → see in bottom-right panel.
+* Export dashboard PDF → confirm file download.
+
+---
+
+## 7) Next Step
+
+With dashboards & reports in place, your lab now has:
+
+* Ingestion → Rules → Detection → Visualization.
+* Next logical step is **Step 9: Incident Simulation & Detection Validation** — run simulated attacks from Kali and confirm detection across your pipeline.
+
+---

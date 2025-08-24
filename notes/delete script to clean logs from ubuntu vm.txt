@@ -1,0 +1,36 @@
+#!/bin/bash
+# Cleanup script for Ubuntu Wazuh Manager
+
+echo "[1/7] Stopping Wazuh services..."
+sudo systemctl stop wazuh-manager
+sudo systemctl stop wazuh-indexer
+sudo systemctl stop wazuh-dashboard
+
+echo "[2/7] Deleting Wazuh alerts older than 7 days..."
+sudo find /var/ossec/logs/alerts/ -type f -name "*.log" -mtime +7 -delete
+sudo find /var/ossec/logs/archives/ -type f -name "*.log" -mtime +7 -delete
+
+echo "[3/7] Clearing old Wazuh agent queues..."
+sudo rm -rf /var/ossec/queue/agent-info/*
+sudo rm -rf /var/ossec/queue/alerts/*
+
+echo "[4/7] Clearing APT cache..."
+sudo apt-get clean
+sudo apt-get autoremove --purge -y
+sudo rm -rf /var/lib/apt/lists/*
+
+echo "[5/7] Clearing journal logs (keeping 7 days)..."
+sudo journalctl --vacuum-time=7d
+
+echo "[6/7] Deleting old indexer data (older than 14 days)..."
+sudo find /var/lib/wazuh-indexer/nodes/0/indices/ -type d -mtime +14 -exec rm -rf {} \; 2>/dev/null
+
+echo "[7/7] Clearing temp files..."
+sudo rm -rf /tmp/* /var/tmp/*
+
+echo "[✔] Restarting Wazuh services..."
+sudo systemctl start wazuh-indexer
+sudo systemctl start wazuh-manager
+sudo systemctl start wazuh-dashboard
+
+echo "✅ Cleanup complete. You can check free space with: df -h"

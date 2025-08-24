@@ -1,0 +1,122 @@
+---
+
+# Step 4: Suricata Integration with Wazuh (Windows Agent)
+
+## 1. Overview
+
+In this step, we will deploy **Suricata IDS** on the Windows endpoint and integrate its logs with the **Wazuh agent**. This enables Wazuh to monitor network intrusion events such as port scans, exploits, and suspicious traffic patterns.
+
+---
+
+## 2. Install Suricata on Windows
+
+1. Download the latest **Suricata for Windows**:
+
+   * Visit [Suricata Official Downloads](https://suricata.io/download/).
+   * Select the **Windows installer (.msi)** and install it on the Windows VM.
+
+2. Verify installation:
+
+   ```powershell
+   cd "C:\Program Files\Suricata"
+   suricata.exe -V
+   ```
+
+   You should see Suricata’s version.
+
+---
+
+## 3. Configure Suricata
+
+1. Open `suricata.yaml` (default location: `C:\Program Files\Suricata\suricata.yaml`).
+
+2. Update the **interface** to match your VM network adapter IP:
+
+   ```yaml
+   af-packet:
+     - interface: 192.168.100.20
+   ```
+
+3. Enable **EVE JSON output** (already included in config):
+
+   ```yaml
+   outputs:
+     - eve-log:
+         enabled: yes
+         filetype: regular
+         filename: eve.json
+   ```
+
+   This will store logs in:
+
+   ```
+   C:\Program Files\Suricata\log\eve.json
+   ```
+
+4. (Optional) Add **Emerging Threats rules**:
+
+   * Download `emerging-all.rules` from [Proofpoint ET Open](https://rules.emergingthreats.net/open/suricata/emerging.rules.tar.gz).
+   * Place rules under `C:\Program Files\Suricata\rules\`.
+   * Update `suricata.yaml`:
+
+     ```yaml
+     default-rule-path: C:\Program Files\Suricata\rules
+     rule-files:
+       - emerging-all.rules
+     ```
+
+---
+
+## 4. Configure Wazuh Agent for Suricata Logs
+
+1. On the Windows VM, edit `ossec.conf`:
+
+   * Path: `C:\Program Files (x86)\ossec-agent\ossec.conf`
+   * Add:
+
+     ```xml
+     <localfile>
+       <location>C:\Program Files\Suricata\log\eve.json</location>
+       <log_format>json</log_format>
+     </localfile>
+     ```
+
+2. Restart the **Wazuh Agent Service** from *Services.msc* or PowerShell:
+
+   ```powershell
+   Restart-Service -Name "WazuhSvc"
+   ```
+
+---
+
+## 5. Test Suricata Detection
+
+1. From your **Kali VM**, run a basic **Nmap scan** against the Windows VM:
+
+   ```bash
+   nmap -sS 192.168.100.20
+   ```
+2. Suricata should generate alerts in `eve.json`.
+3. Wazuh will parse them and send them to the manager.
+
+---
+
+## 6. Validate in Wazuh Dashboard
+
+1. Log into the Wazuh Dashboard (`https://<Wazuh-Server-IP>:5601`).
+2. Navigate to:
+
+   ```
+   Security Events → Suricata
+   ```
+3. You should see IDS alerts (e.g., "ET SCAN Nmap Scan").
+
+---
+
+✅ At this stage:
+
+* Suricata is running on the Windows agent.
+* Logs are being forwarded to Wazuh.
+* You can see IDS alerts in the dashboard.
+
+---

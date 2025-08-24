@@ -1,0 +1,253 @@
+
+---
+
+## 0) Quick pre-checks
+
+* **Manager**: `sudo systemctl status wazuh-manager wazuh-indexer wazuh-dashboard` → all active
+* **Agent (Windows)**: Wazuh agent shows **Connected** in Dashboard → *Agents*
+* **Sysmon**: `sysmon -c` shows your config is loaded
+* **Firewall log**: `C:\Windows\System32\LogFiles\Firewall\pfirewall.log` contains fresh entries
+* **Suricata**: EVE JSON getting updated (where you configured it, e.g. `/var/log/suricata/eve.json`)
+
+---
+
+## 1) Network scan (Nmap) → Windows Firewall + Suricata
+
+**From Kali (or attacker VM):**
+
+```bash
+nmap -sS -sV -O 192.168.100.20
+```
+
+**What you should see**
+
+* **Windows Firewall log** lines like `ALLOW/DROP TCP ...` ingested by Wazuh.
+* **Suricata** alerts (if rules are enabled) such as *ET SCAN Nmap*.
+* **Dashboard paths**:
+
+  * *Security events → Windows → Firewall*
+  * *Security events → Suricata* (your custom rules from Step 5)
+* **Search tips (Dashboard → Discover)**
+
+  * `rule.groups: "suricata"`
+  * `data.win.eventdata.EventChannel: "Microsoft-Windows-Windows Firewall With Advanced Security/Firewall"`
+
+---
+
+## 2) Windows logon failures/success
+
+**From Windows-VM (or another host targeting Windows-VM):**
+
+* Attempt 3–5 wrong password logons to the Windows box (RDP or local).
+
+  * RDP prompt: `mstsc` → connect to `192.168.100.20` → use wrong creds a few times.
+* Then log in successfully once.
+
+**What you should see**
+
+* **Security** log events (4625 failures, 4624 success) collected by the agent.
+* **Dashboard path**: *Security events → Windows → Authentication*
+* **Search tips**:
+
+  * `data.win.system.eventID: 4625` (failed)
+  * `data.win.system.eventID: 4624` (success)
+
+---
+
+## 3) File Integrity Monitoring (FIM)
+
+We configured FIM for common paths. Create, modify, and delete a file.
+
+**On Windows-VM (PowerShell):**
+
+```powershell
+$path = "$env:USERPROFILE\Desktop\fim-test.txt"
+"first" | Out-File -Encoding ASCII $path          # create
+"second" | Out-File -Encoding ASCII $path         # modify (overwrite)
+Remove-Item $path                                 # delete
+```
+
+**What you should see**
+
+* Wazuh FIM alerts: added / modified / deleted.
+* **Dashboard path**: *Integrity monitoring → File changes*
+* **Search tip**: `rule.groups: "syscheck"`
+
+---
+
+## 4) Sysmon process creation / suspicious PowerShell
+
+**On Windows-VM (PowerShell):**
+
+```powershell
+# benign but visible process creation
+whoami; ipconfig /all
+
+# suspicious-ish base64-encoded command (no-op example)
+powershell -NoP -W Hidden -Enc UwB0AGEAcgB0AC0AUwBsAGUAZQBwACAAMQAKAA==
+```
+
+**What you should see**
+
+* Sysmon Event ID 1 (Process Create) entries via channel `Microsoft-Windows-Sysmon/Operational`.
+* **Dashboard path**: *Security events → Windows → Sysmon*
+* **Search tips**:
+
+  * `data.win.system.channel: "Microsoft-Windows-Sysmon/Operational"`
+  * `data.win.eventdata.EventID: 1`
+
+---
+
+## 5) Registry & persistence (optional, safe)
+
+**On Windows-VM (PowerShell, adds and removes a Run key):**
+
+```powershell
+$runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+New-ItemProperty -Path $runKey -Name "LabRun" -Value "cmd.exe /c echo hello" -PropertyType String
+Remove-ItemProperty -Path $runKey -Name "LabRun"
+```
+
+**What you should see**
+
+* Sysmon Event IDs 12/13/14 (RegistryEvent) if configured.
+* **Search tips**:
+
+  * `data.win.eventdata.EventID: 12 OR 13 OR 14`
+  * `data.win.system.channel: "Microsoft-Windows-Sysmon/Operational"`
+
+---
+
+## 6) Windows Defender events
+
+Trigger a benign Defender event by scanning a test file.
+
+**On Windows-VM (PowerShell):**
+
+```powershell
+# Create a dummy harmless test string & scan it
+"not-a-virus" | Out-File -Encoding ASCII $env:TEMP\dummy.txt
+Start-MpScan -ScanPath $env:TEMP\dummy.txt -ScanType QuickScan
+```
+
+**What you should see**
+
+* Channel: `Microsoft-Windows-Windows Defender/Operational`.
+* **Dashboard path**: *Security events → Windows → Defender*
+* **Search tip**: `data.win.system.channel: "Microsoft-Windows-Windows Defender/Operational"`
+
+> If you’re comfortable and isolated, the classic **EICAR** file will generate a real detection. Only do this in the lab.
+
+---
+
+## 7) Suricata HTTP/Service probes (if you run a web service on Windows)
+
+**From Kali (attacker VM):**
+
+```bash
+# Nikto (if you have a simple IIS or other web server in the lab)
+nikto -host 192.168.100.20
+```
+
+**What you should see**
+
+* Suricata alerts related to HTTP scans, potential policy rules.
+* **Dashboard path**: *Security events → Suricata*
+* **Search tips**:
+
+  * `rule.groups: "suricata"`
+  * `data.srcip: 192.168.100.X` (attacker IP)
+
+---
+
+## 8) Validate in Wazuh Dashboard
+
+* **Agent status**: *Agents* → Confirm Windows agent is **Active** and **Last keepalive** is recent.
+* **Security Events**:
+
+  * *Windows → Firewall, Sysmon, Authentication, Defender*
+  * *Suricata* (custom rules from Step 5 convert EVE JSON into events)
+* **Integrity Monitoring**:
+
+  * *Integrity monitoring → File changes*
+* **Discover**:
+
+  * Use filters like `rule.groups`, `data.win.system.eventID`, `data.srcip`, `data.dstip`, `agent.name:"windows"`.
+
+---
+
+## 9) If you don’t see events, check this
+
+1. **Agent connectivity**
+
+```powershell
+# Windows-VM (as Admin PowerShell)
+& "C:\Program Files (x86)\ossec-agent\agent-auth.exe" -m 192.168.100.10
+net start WazuhSvc
+```
+
+* Server side: `sudo /var/ossec/bin/agent_control -lc` should list the agent.
+* Manager logs: `sudo tail -f /var/ossec/logs/ossec.log` (look for connect/auth errors)
+
+2. **Permissions on Windows event logs**
+   Make sure the agent service account is in `Event Log Readers`:
+
+```powershell
+net localgroup "Event Log Readers" "NT SERVICE\ossec" /add
+```
+
+Restart agent after adding.
+
+3. **Sysmon present and configured**
+
+```powershell
+sysmon -c          # shows config
+wevtutil qe "Microsoft-Windows-Sysmon/Operational" /c:5 /f:text   # last 5 events
+```
+
+4. **Firewall log enabled**
+
+```powershell
+Set-NetFirewallProfile -Profile Domain,Public,Private `
+  -LogAllowed True -LogBlocked True `
+  -LogFileName "$env:SystemRoot\system32\LogFiles\Firewall\pfirewall.log" `
+  -LogMaxSizeKilobytes 16384
+```
+
+Confirm new entries appear during scans.
+
+5. **Suricata → Wazuh path**
+
+* Eve JSON file is updating.
+* Wazuh logcollector is pointed to it (as per Step 4/5).
+* `sudo systemctl restart wazuh-manager` after decoder/rules changes.
+* Check `alerts.json`: `sudo tail -f /var/ossec/logs/alerts/alerts.json`
+
+6. **Time sync**
+   Ensure Windows and Ubuntu times are in sync (NTP). Clock drift can hide events.
+
+---
+
+## 10) Success criteria checklist
+
+* [ ] Windows Firewall events appear when running Nmap scans
+* [ ] Sysmon ProcessCreate events (ID 1) visible after running commands
+* [ ] Logon failures (4625) and success (4624) appear
+* [ ] FIM shows create/modify/delete for a test file
+* [ ] Defender logs show scan activity (or EICAR alert in lab)
+* [ ] Suricata alerts appear for scans/probes with your custom rule descriptions
+
+---
+
+## 11) Cleanup (optional)
+
+* Stop Nikto/scan tools on Kali.
+* Remove test registry value (already done above).
+* Remove test files:
+
+```powershell
+Remove-Item -Force $env:TEMP\dummy.txt -ErrorAction SilentlyContinue
+```
+
+---
+

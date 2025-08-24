@@ -1,0 +1,119 @@
+Overview
+--------
+Installed a Wazuh all-in-one manager + dashboard on the Ubuntu VM and registered a Windows endpoint agent so the manager can collect Windows logs. This includes install commands, service checks, agent registration and basic troubleshooting steps.
+
+1. Prepare Ubuntu for install
+-----------------------------
+Commands run:
+    sudo apt update && sudo apt upgrade -y
+    sudo apt install curl apt-transport-https lsb-release gnupg -y
+
+What this does:
+- Updates package lists and upgrades existing packages.
+- Installs small prerequisite utilities used by the Wazuh installer.
+
+2. Download Wazuh installation assistant
+-----------------------------------------
+    curl -sO https://packages.wazuh.com/4.7/wazuh-install.sh
+- Saved the installer script to the current directory.
+
+
+3. Run the all-in-one installer
+-------------------------------
+    sudo bash wazuh-install.sh -a --ignore-check
+Explanation:
+- -a = all-in-one (manager + indexer + dashboard).
+- --ignore-check skips strict OS version check for lab systems.
+
+Notes / Troubleshooting:
+- If the indexer service fails due to resource limits, consider increasing VM RAM or use a lighter/manual install approach.
+- Watch the log at /var/log/wazuh-install.log for detailed errors.
+
+
+4. Confirm dashboard is listening
+----------------------------------
+    sudo ss -tulnp | grep 443
+Expected: a node process listening on 0.0.0.0:443.
+
+
+
+5. If dashboard not reachable from host — verify network & binding
+-------------------------------------------------------------------
+- Confirm Host-only network IP on Ubuntu:
+    ip a | grep 192.168.100
+- Ensure dashboard binds to all interfaces:
+    sudo nano /etc/wazuh-dashboard/opensearch_dashboards.yml
+    # change server.host: "localhost" -> server.host: "0.0.0.0"
+    sudo systemctl restart wazuh-dashboard
+- If firewall is active (UFW), allow 443:
+    sudo ufw allow 443/tcp
+    sudo ufw reload
+
+
+6. Record dashboard credentials
+-------------------------------
+During install the assistant prints credentials. Capture and save them:
+    User: admin
+    Password: <generated-password>
+    URL: https://192.168.100.10
+
+7. Download & install Wazuh Agent on Windows VM
+-----------------------------------------------
+1. Download the agent MSI (use manager-compatible version — see Troubleshooting):
+    https://packages.wazuh.com/4.x/windows/wazuh-agent-4.7.5.msi
+2. Run the installer on Windows and enter:
+    Manager IP: 192.168.100.10
+    Agent name: Windows
+
+
+8. Generate / retrieve the agent auth key on the manager
+---------------------------------------------------------
+On Ubuntu:
+    sudo /var/ossec/bin/manage_agents
+    # press A (add agent)
+    # Name: Windows
+    # IP: 192.168.100.20
+    # Enter for automatic ID
+    # Copy the “Agent key” string
+
+
+9. Register agent on Windows (CLI method)
+-----------------------------------------
+On Windows (Admin CMD/PowerShell):
+    "C:\\Program Files (x86)\\ossec-agent\\agent-auth.exe" -m 192.168.100.10 -A Windows -k <agent_key>
+Expected output: Valid key received.
+
+
+10. Start/Restart the Wazuh Windows service
+-------------------------------------------
+    net stop wazuh
+    net start wazuh
+
+11. Confirm agent on the manager
+--------------------------------
+On Ubuntu:
+    sudo /var/ossec/bin/agent_control -lc
+Expected output:
+    ID: 001, Name: Windows, IP: 192.168.100.20, Status: Active
+
+Also check Wazuh Dashboard → Agents tab.
+
+
+
+12. Quick verification (logs)
+-----------------------------
+On Ubuntu:
+    sudo tail -f /var/ossec/logs/alerts/alerts.json
+    sudo tail -f /var/ossec/logs/ossec.log
+
+On Windows:
+    C:\\Program Files (x86)\\ossec-agent\\ossec.log
+
+
+Troubleshooting
+---------------
+- Agent version mismatch: install matching agent version (4.7.5) or upgrade manager.
+- Agent not appearing: restart Wazuh service on Windows, check connectivity and ports.
+- Dashboard not accessible: confirm network, server.host binding, firewall rules.
+- Permissions/warnings with netplan: chmod 600 /etc/netplan/*.yaml && sudo netplan apply.
+

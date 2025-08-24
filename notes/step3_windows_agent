@@ -1,0 +1,100 @@
+# Step 3: Windows Agent Integration with Wazuh Manager
+
+## Objective
+In this step, we will install and configure the **Wazuh Agent on a Windows endpoint** and connect it to the **Wazuh Manager** (Ubuntu VM). This allows the manager to collect and monitor security events from the Windows machine.
+
+---
+
+## 1. Download Wazuh Windows Agent
+1. Open a browser on the Windows VM.  
+2. Download the latest Wazuh Agent MSI package:  
+   👉 [https://packages.wazuh.com/4.x/windows/wazuh-agent-4.12.0-1.msi](https://packages.wazuh.com/4.x/windows/wazuh-agent-4.12.0-1.msi)  
+
+   *(Replace version if newer is available)*  
+
+---
+
+## 2. Install the Agent
+1. Run the installer (`wazuh-agent-4.12.0-1.msi`).  
+2. Follow the prompts until installation completes.  
+   - The agent service will be installed under `C:\Program Files (x86)\ossec-agent\`.
+
+---
+
+## 3. Register the Windows Agent on the Manager
+On the **Ubuntu Wazuh Manager** VM:
+
+```bash
+sudo /var/ossec/bin/manage_agents
+```
+
+From the interactive menu:
+- Choose `(A)` to add a new agent.  
+- Enter:
+  - **Agent name**: `windows`
+  - **Agent IP**: `192.168.100.20` (Windows VM IP)  
+- Confirm → Wazuh will assign an **Agent ID**.  
+
+Now, extract the agent key:
+- Choose `(E)` from the menu.  
+- Select the Windows agent ID.  
+- Copy the **authentication key** displayed.  
+
+---
+
+## 4. Configure the Windows Agent
+1. Open **Wazuh Agent Manager** from the Start Menu (Windows tray icon → *Manage*).  
+2. Enter:
+   - **Manager IP**: `192.168.100.10` (Ubuntu VM)  
+   - **Authentication key**: paste the key from the Manager  
+3. Click **Save** → **Refresh** → ensure Status = *Running*.  
+
+Alternatively, you can register via command line:
+
+```powershell
+cd "C:\Program Files (x86)\ossec-agent"
+agent-auth.exe -m 192.168.100.10 -A windows -k <authentication_key>
+```
+
+---
+
+## 5. Verify the Agent Connection
+On the Manager (Ubuntu):
+
+```bash
+sudo /var/ossec/bin/agent_control -lc
+```
+
+Expected output:
+```
+ID: 005, Name: windows, IP: 192.168.100.20, Active
+```
+
+This confirms the Windows Agent is properly connected.
+
+---
+
+## 6. Troubleshooting
+
+- **Authentication error (wrong key):**  
+  - Re-register the agent: remove old entry (`manage_agents → R`) and add again.  
+  - Verify the correct key is pasted in Windows Agent Manager.  
+
+- **Incompatible version error:**  
+  - Ensure both Manager and Agent are on the **same major version** (e.g., 4.12.x).  
+  - Download matching MSI from [Wazuh Packages](https://packages.wazuh.com).  
+
+- **Agent not showing as active:**  
+  - Restart service on Windows:  
+    ```powershell
+    net stop wazuh-agent
+    net start wazuh-agent
+    ```  
+  - Check logs on Ubuntu:  
+    ```bash
+    sudo tail -f /var/ossec/logs/ossec.log
+    ```
+
+---
+
+✅ At this point, the **Windows Agent is successfully integrated with the Wazuh Manager**.  

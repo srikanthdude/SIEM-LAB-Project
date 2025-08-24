@@ -1,0 +1,283 @@
+
+---
+
+**Alert Tuning, Notifications & Active Response in Wazuh**
+
+Goal: reduce noise, raise high-fidelity alerts, and trigger safe automated responses.
+
+> Run everything in your lab. Back up any file before editing.
+
+---
+
+## 0) Quick prerequisites
+
+* Manager up: `sudo systemctl status wazuh-manager`
+* You can see Windows agent events (from Step 6).
+* Keep a shell tailing logs while you work:
+
+  ```bash
+  sudo tail -f /var/ossec/logs/ossec.log /var/ossec/logs/alerts/alerts.json
+  ```
+
+---
+
+## 1) Baseline: put local rules in one place
+
+Create (or clean up) your local rules file:
+
+```bash
+sudo install -o root -g root -m 0644 /dev/stdin /var/ossec/etc/rules/local_rules.xml <<'XML'
+<group name="local,">
+  <!-- Elevate noisy-but-important Windows auth failures -->
+  <rule id="100100" level="7">
+    <if_group>windows</if_group>
+    <field name="win.system.eventID">4625</field>
+    <description>Windows logon failed</description>
+    <mitre>
+      <id>T1110</id>
+    </mitre>
+    <options>no_full_log</options>
+  </rule>
+
+  <!-- Successful admin logon from non-local subnet -->
+  <rule id="100110" level="10">
+    <if_group>windows</if_group>
+    <field name="win.system.eventID">4624</field>
+    <regex field="win.eventdata.TargetUserName">Administrator|admin1</regex>
+    <negate field="srcip">^192\.168\.100\.</negate>
+    <description>Admin logon from external subnet</description>
+    <mitre><id>T1078</id></mitre>
+  </rule>
+
+  <!-- Windows Firewall: inbound to SMB/RPC (from Step 6 nmap tests) -->
+  <rule id="100120" level="7">
+    <if_group>windows,firewall</if_group>
+    <regex field="data"> (DROP|ALLOW) +TCP +[0-9\.]+ +[0-9\.]+ +[0-9]+ +(135|139|445)\b</regex>
+    <description>Windows firewall event to RPC/SMB</description>
+    <mitre><id>T1133</id></mitre>
+  </rule>
+
+  <!-- Suricata high priority alerts -->
+  <rule id="100130" level="10">
+    <if_group>suricata</if_group>
+    <field name="suricata.alert.severity">1|2</field>
+    <description>Suricata high-severity alert</description>
+  </rule>
+
+  <!-- FIM: High-value path changed -->
+  <rule id="100140" level="10">
+    <if_group>syscheck</if_group>
+    <regex field="path">\\Windows\\System32\\drivers\\etc\\hosts$</regex>
+    <description>Hosts file modified</description>
+    <mitre><id>T1552</id></mitre>
+  </rule>
+</group>
+XML
+
+sudo /var/ossec/bin/wazuh-control restart
+```
+
+> Tip: If you see “Error loading the rules”, check for XML typos and ensure **unique rule IDs**.
+
+---
+
+## 2) Tune by suppression & requirement
+
+Create a **local decoder** only if needed to normalize custom text logs. For Windows/Sysmon/Suricata you typically don’t need custom decoders. To **suppress** noisy built-in matches or require fields, use rule options:
+
+Add a few examples to `local_rules.xml` (append under the same `<group>`):
+
+```xml
+  <!-- Suppress known safe 4624 logons from our jump host -->
+  <rule id="100200" level="0">
+    <if_matched_sid>18109</if_matched_sid> <!-- (example parent for 4624) -->
+    <field name="srcip">192.168.100.30</field>
+    <description>Noise: known admin jump host successful logon</description>
+  </rule>
+
+  <!-- Require Suricata alert to include HTTP hostname (reduce noise) -->
+  <rule id="100210" level="0">
+    <if_matched_group>suricata</if_matched_group>
+    <negate field="suricata.http.hostname">.+</negate>
+    <description>Drop Suricata alerts without hostname</description>
+  </rule>
+```
+
+Restart manager after edits.
+
+---
+
+## 3) Grouping & frequency (burst control)
+
+Use frequency rules to collapse repeated events:
+
+```xml
+  <!-- Multiple failed logons from same source in 2 minutes -->
+  <rule id="100300" level="10" frequency="5" timeframe="120">
+    <if_matched_sid>100100</if_matched_sid>
+    <same_field>srcip</same_field>
+    <description>Brute-force suspected: multiple failed logons</description>
+    <mitre><id>T1110</id></mitre>
+  </rule>
+```
+
+---
+
+## 4) Notifications (email) — quick path
+
+1. Install MTA (postfix or ssmtp). Example (Postfix, local relay):
+
+   ```bash
+   sudo apt-get update && sudo apt-get install -y postfix mailutils
+   # choose "Local only" for lab, or configure relay as needed
+   ```
+
+2. Enable email in Wazuh:
+
+   ```bash
+   sudo sed -i 's|<email_notification>no</email_notification>|<email_notification>yes</email_notification>|' /var/ossec/etc/ossec.conf
+   sudo sed -i 's|<email_to>.*|<email_to>you@example.com</email_to>|' /var/ossec/etc/ossec.conf
+   sudo sed -i 's|<email_from>.*|<email_from>wazuh@lab.local</email_from>|' /var/ossec/etc/ossec.conf
+   sudo /var/ossec/bin/wazuh-control restart
+   ```
+
+3. Route only important alerts via **local rule**:
+
+   ```xml
+   <rule id="100400" level="12">
+     <if_matched_sid>100110|100130|100300|100140</if_matched_sid>
+     <options>alert_by_email</options>
+     <description>Notify: high-priority local events</description>
+   </rule>
+   ```
+
+---
+
+## 5) Slack/Teams (via custom active-response script)
+
+Create a webhook notifier (simple curl) and call it from a local command. Example Slack:
+
+```bash
+sudo install -d -m 0750 /var/ossec/active-response/bin
+sudo tee /var/ossec/active-response/bin/notify-slack.sh >/dev/null <<'BASH'
+#!/usr/bin/env bash
+WEBHOOK_URL="https://hooks.slack.com/services/XXX/YYY/ZZZ"
+PAYLOAD=$(jq -c '{text: ("Wazuh alert: " + .rule.description + " | agent: " + .agent.name + " | level: " + (.rule.level|tostring))}')
+curl -s -X POST -H 'Content-type: application/json' --data "$PAYLOAD" "$WEBHOOK_URL" >/dev/null
+BASH
+sudo chmod 750 /var/ossec/active-response/bin/notify-slack.sh
+```
+
+**Command block** in `ossec.conf`:
+
+```xml
+<ossec_config>
+  <command>
+    <name>notify-slack</name>
+    <executable>active-response/bin/notify-slack.sh</executable>
+    <expect>srcip</expect>
+    <timeout_allowed>no</timeout_allowed>
+  </command>
+
+  <active-response>
+    <command>notify-slack</command>
+    <location>manager</location>
+    <rules_id>100110,100130,100140,100300</rules_id>
+    <timeout>0</timeout>
+  </active-response>
+</ossec_config>
+```
+
+Restart manager.
+
+> Replace the webhook URL and ensure `jq` is installed: `sudo apt-get install -y jq`.
+
+---
+
+## 6) Safe Active Response (temporary IP block)
+
+Linux (manager) example using `firewalld` or `iptables`. Here’s an iptables script that blocks a source IP for 10 minutes:
+
+```bash
+sudo tee /var/ossec/active-response/bin/ban-ip.sh >/dev/null <<'BASH'
+#!/usr/bin/env bash
+ACTION=$1
+IP=$2
+CHAIN="WAZUH-BLOCK"
+
+iptables -nL $CHAIN >/dev/null 2>&1 || iptables -N $CHAIN
+iptables -C INPUT -j $CHAIN >/dev/null 2>&1 || iptables -I INPUT -j $CHAIN
+
+if [ "$ACTION" = "add" ]; then
+  iptables -I $CHAIN -s "$IP" -j DROP
+elif [ "$ACTION" = "delete" ]; then
+  iptables -D $CHAIN -s "$IP" -j DROP 2>/dev/null || true
+fi
+BASH
+sudo chmod 750 /var/ossec/active-response/bin/ban-ip.sh
+```
+
+Register the command and response:
+
+```xml
+<ossec_config>
+  <command>
+    <name>ban-ip</name>
+    <executable>active-response/bin/ban-ip.sh</executable>
+    <expect>srcip</expect>
+    <timeout_allowed>yes</timeout_allowed>
+  </command>
+
+  <active-response>
+    <command>ban-ip</command>
+    <location>manager</location>
+    <rules_id>100300</rules_id>
+    <timeout>600</timeout> <!-- 10 minutes -->
+  </active-response>
+</ossec_config>
+```
+
+> Test carefully. In a lab, you can unban by waiting for timeout or running:
+> `sudo /var/ossec/active-response/bin/ban-ip.sh delete <ip>`
+
+---
+
+## 7) Retention & noise control (indexer + manager)
+
+* Trim old alerts on the manager:
+
+  ```bash
+  sudo sed -i 's|<alerts_log>yes</alerts_log>|<alerts_log>no</alerts_log>|' /var/ossec/etc/ossec.conf
+  sudo /var/ossec/bin/wazuh-control restart
+  ```
+
+  (You’ll still have alerts in the Indexer; this just reduces disk on `/var/ossec`.)
+
+* In the Dashboard, set shorter ILM/Index lifecycle (optional) for lab data (e.g., 7–14 days).
+
+---
+
+## 8) Validate end-to-end
+
+1. Trigger 5 bad logons (Step 6) → expect *100300 Brute-force suspected* + Slack/email + (optional) IP temp block.
+2. Modify hosts file → expect *100140 Hosts file modified* + Slack/email.
+3. Generate a Suricata high-severity hit → expect *100130* + Slack/email.
+
+Use **Discover** filters:
+
+* `rule.id: 100110 OR 100120 OR 100130 OR 100140 OR 100300`
+* `agent.name: "windows"`
+
+---
+
+## 9) Rollback & safety
+
+* Disable a response by commenting its `<active-response>` block and restart manager.
+* If you block yourself with iptables, use VM console to remove the rule:
+
+  ```bash
+  sudo iptables -F WAZUH-BLOCK
+  sudo iptables -X WAZUH-BLOCK
+  ```
+
+---

@@ -1,0 +1,68 @@
+Quick Start Guide – Restarting All Operations
+1️⃣ Start Wazuh Manager in Ubuntu VM
+bash
+Copy
+Edit
+# Login to Ubuntu VM
+sudo systemctl start wazuh-manager
+sudo systemctl start wazuh-indexer
+sudo systemctl start wazuh-dashboard
+
+# Check status (optional)
+sudo systemctl status wazuh-manager
+sudo systemctl status wazuh-dashboard
+Tip: Wait 1–2 minutes for the dashboard to fully load.
+
+Access dashboard from Host browser:
+
+cpp
+Copy
+Edit
+https://192.168.100.10
+2️⃣ Start Wazuh Agent in Windows VM
+Run as Administrator → Command Prompt:
+
+cmd
+Copy
+Edit
+net start wazuh
+Check Wazuh Agent UI:
+
+Manager IP: 192.168.100.10
+
+Auth Key: Already saved from last setup
+
+Status should be Running
+
+3️⃣ Start Kali VM for Attack Simulation
+No special services needed, just open a terminal and run your attack commands when ready:
+
+bash
+Copy
+Edit
+# Example Reconnaissance Scan
+nmap -sS -sV -O -A 192.168.100.20
+
+# Example Brute-force with Hydra (if enabled on target)
+hydra -l admin -P /usr/share/wordlists/rockyou.txt rdp://192.168.100.20
+4️⃣ Optional – Firewall Rules Reminder (Ubuntu)
+If after reboot the firewall is enabled, re-allow Wazuh ports:
+
+bash
+Copy
+Edit
+sudo ufw allow 1514/tcp
+sudo ufw allow 1514/udp
+sudo ufw allow 1515/tcp
+sudo ufw reload
+5️⃣ Verify Agent Connection in Ubuntu
+bash
+Copy
+Edit
+sudo /var/ossec/bin/agent_control -lc
+You should see both:
+
+ubuntu-vm (server)
+
+Windows (Windows agent)
+

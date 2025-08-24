@@ -1,0 +1,117 @@
+# Step 1 – VM Setup and Network Configuration
+**Date:** YYYY-MM-DD  
+**Status:** ✅ Completed  
+
+---
+
+## 1. Overview
+This step involved setting up the virtual environment for the SIEM Threat Detection Lab.  
+Three virtual machines (VMs) were created in VirtualBox, each with specific roles:
+
+| VM Name        | Role           | OS Version          | Host-only IP    | Adapters       |
+|----------------|---------------|--------------------|-----------------|----------------|
+| Wazuh-Manager  | SIEM Core     | Ubuntu Server 22.04 | 192.168.100.10  | NAT + Host-only|
+| Win10-Endpoint | Endpoint Host | Windows 10 Pro     | 192.168.100.20  | NAT + Host-only|
+| Kali-Attacker  | Attacker      | Kali Rolling       | 192.168.100.30  | NAT + Host-only|
+
+---
+
+## 2. VM Resource Allocations
+- **Wazuh Manager (Ubuntu Server)**
+  - 4 vCPU, 8 GB RAM, 50 GB storage
+- **Windows 10 Endpoint**
+  - 2 vCPU, 3 GB RAM, 30 GB storage
+- **Kali Attacker**
+  - 2 vCPU, 4 GB RAM, 20 GB storage
+
+---
+
+## 3. Network Configuration
+Each VM was configured with **two network adapters**:
+- **Adapter 1 (NAT):** Internet access for package updates and downloads
+- **Adapter 2 (Host-only):** Isolated lab network (`vboxnet0`) for inter-VM communication
+
+### Host-only Network (vboxnet0)
+- IPv4 Address: `192.168.100.1`
+- Subnet Mask: `255.255.255.0`
+- DHCP: Disabled (static IPs assigned to VMs)
+
+---
+
+## 4. Static IP Assignments
+**Wazuh Manager (Ubuntu Server)**
+```yaml
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    enp0s3:    # NAT adapter
+      dhcp4: true
+    enp0s8:    # Host-only adapter
+      dhcp4: no
+      addresses: [192.168.100.10/24]
+      routes:
+        - to: default
+          via: 192.168.100.1
+      nameservers:
+        addresses: [8.8.8.8, 1.1.1.1]
+Windows 10 Endpoint
+
+IP: 192.168.100.20
+
+Subnet: 255.255.255.0
+
+Gateway: 192.168.100.1
+
+DNS: 8.8.8.8, 1.1.1.1
+
+Kali Attacker
+
+bash
+Copy
+Edit
+nmcli con modify "Wired connection 2" \
+  ipv4.addresses 192.168.100.30/24 \
+  ipv4.gateway 192.168.100.1 \
+  ipv4.dns "8.8.8.8 1.1.1.1" \
+  ipv4.method manual
+
+nmcli con up "Wired connection 2"
+5. Promiscuous Mode Settings
+Wazuh Manager → NAT: Deny, Host-only: Allow All
+
+Windows 10 Endpoint → NAT: Deny, Host-only: Deny
+
+Kali Attacker → NAT: Deny, Host-only: Allow All
+
+6. Connectivity Tests
+From each VM:
+
+bash
+Copy
+Edit
+ping 192.168.100.10   # Wazuh Manager
+ping 192.168.100.20   # Windows Endpoint
+ping 192.168.100.30   # Kali Attacker
+ping 8.8.8.8          # Internet test
+✅ All VMs can communicate over Host-only network and access the internet via NAT.
+
+7. Screenshots
+(Insert your screenshots here as you document the process)
+
+Screenshot of VirtualBox Network settings for each VM
+
+Screenshot of ip a from Ubuntu Wazuh Manager
+
+Screenshot of ipconfig from Windows
+
+Screenshot of nmcli output from Kali
+
+Screenshot of successful ping tests between VMs
+
+8. Notes & Issues
+gateway4 in netplan is deprecated — replaced with routes syntax.
+
+Fixed netplan file permissions (sudo chmod 600 /etc/netplan/*.yaml) to remove warnings.
+
+No DHCP used on Host-only network — all IPs assigned manually.

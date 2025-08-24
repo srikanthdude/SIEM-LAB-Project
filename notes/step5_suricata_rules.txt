@@ -1,0 +1,133 @@
+
+---
+
+# Step 5: Custom Wazuh Decoders & Rules for Suricata
+
+## 1. Overview
+
+Suricata sends logs in **EVE JSON** format. Wazuh can ingest these logs, but to display them properly in the dashboard, we need to create **decoders** and **rules**.
+
+This step ensures that Wazuh correctly interprets Suricata alerts (e.g., Nmap scan, brute force, malware traffic) and raises meaningful security events.
+
+---
+
+## 2. Create Custom Decoder for Suricata
+
+1. On the **Wazuh Manager VM**, create a custom decoder file:
+
+   ```bash
+   sudo nano /var/ossec/etc/decoders/suricata_decoders.xml
+   ```
+
+2. Add the following content:
+
+   ```xml
+   <decoder name="suricata-json">
+     <program_name>ossec</program_name>
+     <prematch>\{"timestamp":.*"event_type":</prematch>
+     <json>json</json>
+   </decoder>
+   ```
+
+3. Save and exit.
+
+---
+
+## 3. Create Custom Rules for Suricata
+
+1. Create a rules file:
+
+   ```bash
+   sudo nano /var/ossec/etc/rules/suricata_rules.xml
+   ```
+
+2. Add rules:
+
+   ```xml
+   <group name="suricata,">
+     <!-- Generic Suricata Alert -->
+     <rule id="100001" level="7">
+       <decoded_as>json</decoded_as>
+       <field name="event_type">alert</field>
+       <description>Suricata Alert: $(alert.signature)</description>
+       <group>ids,network,suricata,</group>
+     </rule>
+
+     <!-- Nmap Scan -->
+     <rule id="100002" level="10" overwrite="yes">
+       <decoded_as>json</decoded_as>
+       <field name="alert.signature">ET SCAN Nmap</field>
+       <description>Suricata: Nmap scan detected</description>
+       <group>ids,scan,suricata,</group>
+     </rule>
+
+     <!-- Possible Brute Force -->
+     <rule id="100003" level="12">
+       <decoded_as>json</decoded_as>
+       <field name="alert.signature">ET POLICY Bruteforce</field>
+       <description>Suricata: Brute force attempt detected</description>
+       <group>ids,bruteforce,suricata,</group>
+     </rule>
+   </group>
+   ```
+
+3. Save and exit.
+
+---
+
+## 4. Restart Wazuh Manager
+
+```bash
+sudo systemctl restart wazuh-manager
+```
+
+---
+
+## 5. Test the Integration
+
+1. From **Kali VM**, trigger attacks:
+
+   * **Nmap Scan**:
+
+     ```bash
+     nmap -sS 192.168.100.20
+     ```
+   * **Brute Force Simulation** (Hydra, optional):
+
+     ```bash
+     hydra -l admin -P passwords.txt ssh://192.168.100.20
+     ```
+
+2. Check Wazuh logs on the manager:
+
+   ```bash
+   sudo tail -f /var/ossec/logs/alerts/alerts.json
+   ```
+
+3. You should see Suricata alerts with meaningful tags.
+
+---
+
+## 6. Validate in Dashboard
+
+1. Log into the Wazuh Dashboard.
+2. Navigate to:
+
+   ```
+   Security Events → Suricata
+   ```
+3. Check that alerts are categorized as:
+
+   * **Suricata Alert: \$(alert.signature)**
+   * **Nmap scan detected**
+   * **Brute force attempt detected**
+
+---
+
+✅ At this stage:
+
+* Suricata logs are parsed with **custom decoders**.
+* Alerts are categorized using **custom rules**.
+* The dashboard shows clean, understandable events.
+
+---
